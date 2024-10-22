@@ -56,12 +56,6 @@ import numba #Numba translates Python functions to optimized machine code at run
 import os
 from joblib import Parallel, delayed, parallel_backend
 import time
-import traceback
-import logging
-
-# Set up logging
-logging.basicConfig(filename='connectivity_calculation.log', level=logging.ERROR,
-                    format='%(asctime)s - %(levelname)s - %(message)s')
 
 ## ~~~~~~~~~~~~~~~~~~ ##
 ## ~     Functions  ~ ##
@@ -474,68 +468,92 @@ def points_in_polygon(xs, ys, miny, maxy, polygon):
 
 
 def calc(source_reef):
-    try:
+  """
+  Calculates the connectivity metrics for a given source reef using particle dispersal tracks.
+
+  Args:
+    source_reef (int): The index of the source reef to calculate connectivity from.
+
+  Returns:
+    list: A list containing four numpy arrays representing the connectivity metrics:
+          - connectivity_matrix_max: Maximum connectivity values for each reef in the study area.
+          - connectivity_matrix_sum: Sum of connectivity values for each reef in the study area.
+          - connectivity_variance_max: Variance of maximum connectivity values for each reef.
+          - connectivity_variance_sum: Variance of sum of connectivity values for each reef.
+  """
+  try:
         print(f"Processing job {source_reef}") 
         file_name = path + "/GBR1_H2p0_Coral_Release_" + release_start_day + "_Polygon_" +  str(source_reef) + '_Wind_3_percent_displacement_field.nc'
         if not os.path.exists(file_name):
-            print(f'File missing - {source_reef}')
-            return None
-        
-        output_nc = xr.open_dataset(file_name)
-        ntraj = output_nc.dims['traj']
-        if ntraj is None:
-            print(f"Error: ntraj is None for source_reef {source_reef}")
-            return None
-        
-        particles = pd.DataFrame({
-            'latitudes' : output_nc['lat'].values.ravel(),
-            'longitudes' : output_nc['lon'].values.ravel(),
-            'trajectories' : output_nc['trajectory'].values.ravel(),
-            'age' : output_nc['age'].values.ravel() / 86400 ## Seconds to days
-        })
-        output_nc.close()
-        
-        # Cleaning the nans
-        particles = particles.dropna()
-        ## remove particles below minimum age
-        particles = particles[particles['age'] > tc]
-        
-        if particles.empty:
-            print(f"No valid particles for source_reef {source_reef}")
-            return None
-        
-        # Are these points inside the polygon?
-        p = points_in_polygon(
-            particles['longitudes'].values,
-            particles['latitudes'].values,
-            data_shape.min_lat[source_reef],
-            data_shape.max_lat[source_reef],
-            np.array(list(data_shape['geometry'][source_reef].exterior.coords)))
-        m = np.where(p)[0]
-        if(len(m > 0)):
-            settled_age  = particles['age'].iloc[m].values
-            settled_traj = particles['trajectories'].iloc[m].values
-            ## get the model decay and competence for the entired projection
-            # Calculate decay and competence for the 2p6 scenario
-            connectivity_2p6 = calculate_decay_and_competence(dsst_2p6, settled_age, settled_traj, ntraj)
-            # Calculate decay and competence for the 4p5 scenario
-            connectivity_4p5 = calculate_decay_and_competence(dsst_4p5, settled_age, settled_traj, ntraj)
-            # Calculate decay and competence for the 7p0 scenario
-            connectivity_7p0 = calculate_decay_and_competence(dsst_7p0, settled_age, settled_traj, ntraj)
-            # Calculate decay and competence for the 8p5 scenario
-            connectivity_8p5 = calculate_decay_and_competence(dsst_8p5, settled_age, settled_traj, ntraj)
-            ## Save the connectivity for all years of simulation in the scenarios number and the sink_reef (reef index)
-            connectivity_matrix_max[:, 0, source_reef] = connectivity_2p6
-            connectivity_matrix_max[:, 1, source_reef] = connectivity_4p5
-            connectivity_matrix_max[:, 2, source_reef] = connectivity_7p0
-            connectivity_matrix_max[:, 3, source_reef] = connectivity_8p5
-            
-            particles.drop(index = particles.iloc[m].index, inplace=True)
+            print('file missing - ' + str(source_reef))
+        else:
+            output_nc = xr.open_dataset(file_name)
+            ntraj     = output_nc.dims['traj']
+            particles = pd.DataFrame({
+                'latitudes' : output_nc['lat'].values.ravel(),
+                'longitudes' : output_nc['lon'].values.ravel(),
+                'trajectories' : output_nc['trajectory'].values.ravel(),
+                'age' : output_nc['age'].values.ravel() / 86400 ## Seconds to days
+            })
+            output_nc.close()
+            # Cleaning the nans
+            particles = particles.dropna()
+            ## remove particles bellow minimum age
+            particles=particles[particles['age'] > tc]
+            ## set particles boundaries in model domain
+            ## this avoids the overload of looking over all the reefs
+            particle_max_lat = np.nanmax(particles['latitudes'].values)
+            particle_min_lat = np.nanmin(particles['latitudes'].values)
+            # making boolean series
+            upper_bound = data_shape['min_lat'] <= particle_max_lat
+            mmax = upper_bound.to_numpy()
+            inf_bound   = data_shape['max_lat'] >= particle_min_lat
+            minf = inf_bound.to_numpy()
+            boundary_reefs = np.where(np.multiply(minf, mmax))[0]
+            ## Get the dSST for each source reef
+            dsst_2p6 = get_sst_values(source_reef, "2p6")
+            dsst_4p5 = get_sst_values(source_reef, "4p5")
+            dsst_7p0 = get_sst_values(source_reef, "7p0")
+            dsst_8p5 = get_sst_values(source_reef, "8p5")
+            year_simulations = len(dsst_2p6)
+            num_scenarios = 4
+            ## Creating empty arrays    
+            connectivity_matrix_max   = np.zeros((year_simulations, num_scenarios, num_reefs))
+            for sink_reef in boundary_reefs:
+                reef_index = data_shape['FID'][sink_reef]
+                polygon = np.array(list(data_shape['geometry'][sink_reef].exterior.coords))
+                if(particles.size == 0):
+                    break ## breaking the loop if not more particles
+                # Are these points inside the polygon?
+                p = points_in_polygon(
+                    particles['longitudes'].values,
+                    particles['latitudes'].values,
+                    data_shape.min_lat[sink_reef],
+                    data_shape.max_lat[sink_reef],
+                    polygon)
+                m = np.where(p)[0]
+                if(len(m > 0)):
+                    settled_age  = particles['age'].iloc[m].values
+                    settled_traj = particles['trajectories'].iloc[m].values
+                    ## get the model decay and competence for the entired projection
+                    # Calculate decay and competence for the 2p6 scenario
+                    connectivity_2p6 = calculate_decay_and_competence(dsst_2p6, settled_age, settled_traj, ntraj)
+                    # Calculate decay and competence for the 4p5 scenario
+                    connectivity_4p5 = calculate_decay_and_competence(dsst_4p5, settled_age, settled_traj, ntraj)
+                    # Calculate decay and competence for the 7p0 scenario
+                    connectivity_7p0 = calculate_decay_and_competence(dsst_7p0, settled_age, settled_traj, ntraj)
+                    # Calculate decay and competence for the 8p5 scenario
+                    connectivity_8p5 = calculate_decay_and_competence(dsst_8p5, settled_age, settled_traj, ntraj)
+                    ## Save the connectivity for all years of simulation in the scenarios number and the sink_reef (reef index)
+                    connectivity_matrix_max[:, 0, reef_index] = connectivity_2p6
+                    connectivity_matrix_max[:, 1, reef_index] = connectivity_4p5
+                    connectivity_matrix_max[:, 2, reef_index] = connectivity_7p0
+                    connectivity_matrix_max[:, 3, reef_index] = connectivity_8p5
+                
+                    particles.drop(index = particles.iloc[m].index, inplace=True)
         return connectivity_matrix_max
-    except Exception as e:
-        error_msg = f"Error processing job {source_reef}: {str(e)}\n{traceback.format_exc()}"
-        print(error_msg)
-        logging.error(error_msg)
+  except Exception as e:
+        print(f"Error processing job {source_reef}: {e}")
         return None
 
 # ## ~~~~~~~~~~~~~~~~~~~~ ##
@@ -590,30 +608,24 @@ jobs = range(num_reefs)
 n_jobs = int(os.getenv('SLURM_CPUS_ON_NODE', 10))
 print(f"n_jobs: {n_jobs}")
 with parallel_backend(backend='loky', n_jobs=n_jobs):
-    results_list = Parallel(n_jobs=n_jobs)(delayed(calc)(k) for k in jobs)
+    results_list = Parallel()(delayed(calc)(k) for k in jobs)
 
-# Count and log the number of None results
-none_count = sum(1 for result in results_list if result is None)
-print(f"Number of None results: {none_count}")
-logging.info(f"Number of None results: {none_count}")
-
-# Filter out None results
-valid_results = [result for result in results_list if result is not None]
-
-print(f'Calculations done. Valid results: {len(valid_results)} out of {len(jobs)}', time.strftime("%H:%M:%S"), flush=True)
-logging.info(f'Calculations done. Valid results: {len(valid_results)} out of {len(jobs)}')
+print('calculations done', time.strftime("%H:%M:%S"), flush = True)
 
 ## Creating empty arrays
 connectivity_matrix_max = np.zeros((len_years_projection, len_scenarios, num_reefs, num_reefs))
 
-for k, result in enumerate(valid_results):
-    if result is not None:
-        connectivity_matrix_max[:, :, k, :] = result
+for k in jobs:
+    connectivity_matrix_max[:, :, k, :] = results_list[k]
 ## generate a netcdf file with the connectivity data
-# Create a new xarray Dataset to hold the connectivity data
+# Define chunk sizes
+chunk_sizes = {'year': 1, 'scenario': 1, 'source_reef': 100, 'target_reef': 100}
+
 ds = xr.Dataset(
     {
-        "connectivity": (["year", "scenario", "source_reef", "target_reef"], connectivity_matrix_max.astype('float32'))
+        "connectivity": (["year", "scenario", "source_reef", "target_reef"], 
+                         connectivity_matrix_max.astype(np.float32), 
+                         {'chunks': chunk_sizes})
     },
     coords={
         "year": years_projection,
@@ -632,8 +644,7 @@ ds.attrs["created_by"] = "Javier Porobic, email: javier.porobicgarate@csiro.au"
 
 # Save the dataset to a NetCDF file
 output_file = f"connectivity_matrix_{release_start_day}.nc"
-ds.to_netcdf(output_file, compression={'zlib': True, 'complevel': 4}, 
-             encoding={'connectivity': {'chunksizes': (1, 1, 100, 100)}})
-
+ds.to_netcdf(output_file, compression={'zlib': True, 'complevel': 9}, 
+             encoding={'connectivity': {'chunks': chunk_sizes, 'dtype': 'float32'}})
 print(f"NetCDF file created: {output_file}")
 
