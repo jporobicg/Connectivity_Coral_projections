@@ -1,0 +1,6 @@
+TODO:
+- Calculate the particles in overlaping reefs
+- Calculate connectivity for each reef and scenario
+- create a netcdf file with the connectivity data
+- check theat the parcles are not removed from the analysis after settlement
+- get everything into the netcdf file
