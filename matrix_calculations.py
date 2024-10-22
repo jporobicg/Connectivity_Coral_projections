@@ -624,8 +624,7 @@ chunk_sizes = {'year': 1, 'scenario': 1, 'source_reef': 100, 'target_reef': 100}
 ds = xr.Dataset(
     {
         "connectivity": (["year", "scenario", "source_reef", "target_reef"], 
-                         connectivity_matrix_max.astype(np.float32), 
-                         {'chunks': chunk_sizes})
+                         connectivity_matrix_max.astype(np.float32))
     },
     coords={
         "year": years_projection,
