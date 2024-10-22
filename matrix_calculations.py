@@ -644,7 +644,14 @@ ds.attrs["created_by"] = "Javier Porobic, email: javier.porobicgarate@csiro.au"
 
 # Save the dataset to a NetCDF file
 output_file = f"connectivity_matrix_{release_start_day}.nc"
-ds.to_netcdf(output_file, compression={'zlib': True, 'complevel': 9}, 
-             encoding={'connectivity': {'chunks': chunk_sizes, 'dtype': 'float32'}})
+encoding = {
+    'connectivity': {
+        'zlib': True,
+        'complevel': 9,
+        'chunks': chunk_sizes,
+        'dtype': 'float32'
+    }
+}
+ds.to_netcdf(output_file, encoding=encoding)
 print(f"NetCDF file created: {output_file}")
 
