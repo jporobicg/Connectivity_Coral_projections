@@ -468,20 +468,7 @@ def points_in_polygon(xs, ys, miny, maxy, polygon):
 
 
 def calc(source_reef):
-  """
-  Calculates the connectivity metrics for a given source reef using particle dispersal tracks.
-
-  Args:
-    source_reef (int): The index of the source reef to calculate connectivity from.
-
-  Returns:
-    list: A list containing four numpy arrays representing the connectivity metrics:
-          - connectivity_matrix_max: Maximum connectivity values for each reef in the study area.
-          - connectivity_matrix_sum: Sum of connectivity values for each reef in the study area.
-          - connectivity_variance_max: Variance of maximum connectivity values for each reef.
-          - connectivity_variance_sum: Variance of sum of connectivity values for each reef.
-  """
-  try:
+    try:
         print(f"Processing job {source_reef}") 
         file_name = path + "/GBR1_H2p0_Coral_Release_" + release_start_day + "_Polygon_" +  str(source_reef) + '_Wind_3_percent_displacement_field.nc'
         if not os.path.exists(file_name):
@@ -496,25 +483,40 @@ def calc(source_reef):
                 'age' : output_nc['age'].values.ravel() / 86400 ## Seconds to days
             })
             output_nc.close()
+            
+            print(f"Source reef {source_reef}: Initial particle count: {len(particles)}")
+            
             # Cleaning the nans
             particles = particles.dropna()
+            print(f"Source reef {source_reef}: Particle count after dropping NaNs: {len(particles)}")
+            
             ## remove particles bellow minimum age
-            particles=particles[particles['age'] > tc]
+            particles = particles[particles['age'] > tc]
+            print(f"Source reef {source_reef}: Particle count after age filter: {len(particles)}")
+            
             ## set particles boundaries in model domain
-            ## this avoids the overload of looking over all the reefs
             particle_max_lat = np.nanmax(particles['latitudes'].values)
             particle_min_lat = np.nanmin(particles['latitudes'].values)
+            print(f"Source reef {source_reef}: Particle latitude range: {particle_min_lat} to {particle_max_lat}")
+            
             # making boolean series
             upper_bound = data_shape['min_lat'] <= particle_max_lat
             mmax = upper_bound.to_numpy()
             inf_bound   = data_shape['max_lat'] >= particle_min_lat
             minf = inf_bound.to_numpy()
             boundary_reefs = np.where(np.multiply(minf, mmax))[0]
+            print(f"Source reef {source_reef}: Number of potential sink reefs: {len(boundary_reefs)}")
+            
             ## Get the dSST for each source reef
             dsst_2p6 = get_sst_values(source_reef, "2p6")
+            print(f"Source reef {source_reef}: dSST for 2p6 scenario: {dsst_2p6}")
             dsst_4p5 = get_sst_values(source_reef, "4p5")
+            print(f"Source reef {source_reef}: dSST for 4p5 scenario: {dsst_4p5}")
             dsst_7p0 = get_sst_values(source_reef, "7p0")
+            print(f"Source reef {source_reef}: dSST for 7p0 scenario: {dsst_7p0}")
             dsst_8p5 = get_sst_values(source_reef, "8p5")
+            print(f"Source reef {source_reef}: dSST for 8p5 scenario: {dsst_8p5}")
+            
             year_simulations = len(dsst_2p6)
             num_scenarios = 4
             ## Creating empty arrays    
@@ -552,7 +554,7 @@ def calc(source_reef):
                 
                     particles.drop(index = particles.iloc[m].index, inplace=True)
         return connectivity_matrix_max
-  except Exception as e:
+    except Exception as e:
         print(f"Error processing job {source_reef}: {e}")
         return None
 
@@ -606,7 +608,12 @@ path='/datasets/work/oa-coconet/work/OceanParcels_outputs/Coral/' + release_star
 print(f"path: {path}")
 jobs = range(num_reefs)
 n_jobs = int(os.getenv('SLURM_CPUS_ON_NODE', 10))
-print(f"n_jobs: {n_jobs}")
+## print the parameters
+print(f"Number of reefs: {num_reefs}")
+print(f"Release start day: {release_start_day}")
+print(f"Scenarios: {scenarios}")
+print(f"Years projection: {years_projection}")
+print(f"Number of jobs: {n_jobs}")
 with parallel_backend(backend='loky', n_jobs=n_jobs):
     results_list = Parallel()(delayed(calc)(k) for k in jobs)
 
