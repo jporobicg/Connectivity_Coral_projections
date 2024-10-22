@@ -616,10 +616,14 @@ print('calculations done', time.strftime("%H:%M:%S"), flush = True)
 connectivity_matrix_max = np.zeros((len_years_projection, len_scenarios, num_reefs, num_reefs))
 
 for k in jobs:
-    connectivity_matrix_max[:, :, k, :] = results_list[k]
+    ## check if the results are none
+    if results_list[k] is not None:
+        connectivity_matrix_max[:, :, k, :] = results_list[k]
+    else:
+        print(f"Results for job {k} are None")
+
 ## generate a netcdf file with the connectivity data
 # Define chunk sizes
-chunk_sizes = {'year': 1, 'scenario': 1, 'source_reef': 100, 'target_reef': 100}
 
 ds = xr.Dataset(
     {
@@ -647,7 +651,6 @@ encoding = {
     'connectivity': {
         'zlib': True,
         'complevel': 9,
-        'chunks': chunk_sizes,
         'dtype': 'float32'
     }
 }
