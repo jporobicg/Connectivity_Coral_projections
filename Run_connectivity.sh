@@ -4,7 +4,7 @@
 #SBATCH --mem=40g
 #SBATCH --cpus-per-task=10
 #SBATCH --job-name='Coral - connectivity'
-#SBATCH --array=0-21
+#SBATCH --array=12-14
 
 module load python
 

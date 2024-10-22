@@ -616,11 +616,8 @@ print('calculations done', time.strftime("%H:%M:%S"), flush = True)
 connectivity_matrix_max = np.zeros((len_years_projection, len_scenarios, num_reefs, num_reefs))
 
 for k in jobs:
-    ## check if the results are none
-    if results_list[k] is not None:
-        connectivity_matrix_max[:, :, k, :] = results_list[k]
-    else:
-        print(f"Results for job {k} are None")
+    connectivity_matrix_max[:, :, k, :] = results_list[k]
+
 
 ## generate a netcdf file with the connectivity data
 # Define chunk sizes
