@@ -720,7 +720,7 @@ len_years_projection = len(years_projection)
 path='/datasets/work/oa-coconet/work/OceanParcels_outputs/Coral/' + release_start_day
 print(f"path: {path}")
 jobs = range(num_reefs)
-n_jobs = int(os.getenv('SLURM_CPUS_ON_NODE', 20))
+n_jobs = int(os.getenv('SLURM_CPUS_ON_NODE', 30))
 ## print the parameters
 print(f"Number of reefs: {num_reefs}")
 print(f"Release start day: {release_start_day}")
@@ -728,12 +728,12 @@ print(f"Scenarios: {scenarios}")
 print(f"Years projection: {years_projection}")
 print(f"Number of jobs: {n_jobs}")
 results_list = []
-#with parallel_backend(backend='loky', n_jobs=n_jobs):
-#    results_list = Parallel()(delayed(calc)(k) for k in jobs)
-for k in jobs:
-   result = calc(k)#
-   results_list.append(result)
-   print(f"Completed job {k}/{len(jobs)}")
+with parallel_backend(backend='loky', n_jobs=n_jobs):
+    results_list = Parallel()(delayed(calc)(k) for k in jobs)
+#for k in jobs:
+#   result = calc(k)#
+#   results_list.append(result)
+#   print(f"Completed job {k}/{len(jobs)}")
 
 print('calculations done', time.strftime("%H:%M:%S"), flush = True)
 
@@ -771,7 +771,7 @@ ds.attrs["created_on"] = time.strftime("%Y-%m-%d %H:%M:%S")
 ds.attrs["created_by"] = "Javier Porobic, email: javier.porobicgarate@csiro.au"
 
 # Save the dataset to a NetCDF file
-output_file = f"connectivity_matrix_trapezoid_integration_{release_start_day}.nc"
+output_file = f"connectivity_matrix_trapezoid_integration_non_vectorized_{release_start_day}.nc"
 encoding = {
     'connectivity_max': {
         'zlib': True,

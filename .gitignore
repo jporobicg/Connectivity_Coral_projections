@@ -2,3 +2,5 @@
 *.nc
 ## ignore slurm output files
 slurm-*.out
+## removing bash files
+*.sh
