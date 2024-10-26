@@ -1,2 +1,4 @@
 ## NetCDF files
 *.nc
+## ignore slurm output files
+slurm-*.out

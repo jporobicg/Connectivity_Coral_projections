@@ -1,6 +1,8 @@
-TODO:
-- Calculate the particles in overlaping reefs
-- Calculate connectivity for each reef and scenario
-- create a netcdf file with the connectivity data
-- check theat the parcles are not removed from the analysis after settlement
-- get everything into the netcdf file
+TODO []:
+- [ ] Calculate the particles in overlaping reefs
+- [X] Calculate connectivity for each reef and scenario
+- [X] Change integration method to trapezoid. allow more flexibility in the integration method
+- [X] test integration methods
+- [ ] create a netcdf file with the connectivity data
+- [ ] check theat the parcles are not removed from the analysis after settlement
+- [X] get everything into the netcdf file

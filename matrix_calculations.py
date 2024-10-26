@@ -51,11 +51,12 @@ import shapely
 import math
 from tqdm import tqdm
 import pandas as pd
-from numba import jit, njit
+from numba import jit, njit, vectorize
 import numba #Numba translates Python functions to optimized machine code at runtime.
 import os
 from joblib import Parallel, delayed, parallel_backend
 import time
+
 
 ## ~~~~~~~~~~~~~~~~~~ ##
 ## ~     Functions  ~ ##
@@ -87,6 +88,9 @@ def bathtub_curve(lmbda, v, sigma) :
 
     u = lambda t:(lmbda * v * pow((lmbda * t), v - 1)) / (1 - sigma * pow((lmbda * t), v))
     return(u)
+
+
+
 
 def piecewise_decay(ages, Tcp, lmbda1, lmbda2, v1, v2, sigma1, sigma2):
     """
@@ -139,36 +143,113 @@ def piecewise_decay(ages, Tcp, lmbda1, lmbda2, v1, v2, sigma1, sigma2):
 
 
 
+# def single_bathtub_decay(t, lambda_single, v_single, sigma_single):
+#     """
+#     Calculate decay values for given time points using a single bathtub curve.
+
+#     Parameters
+#     ----------
+#     t : array-like
+#         Time points to calculate decay for.
+#     lambda_single : float
+#         Lambda parameter for the bathtub curve.
+#     v_single : float
+#         Shape parameter for the bathtub curve.
+#     sigma_single : float
+#         Sigma parameter for the bathtub curve.
+
+#     Returns
+#     -------
+#     list
+#         A list of survival probabilities for the corals, calculated using a single
+#         bathtub curve. Each survival probability corresponds to the age
+#         in the input list `t`.
+#     """
+#     fx = lambda tau: bathtub_curve(lambda_single, v_single, sigma_single)(tau)
+#     decay = []      
+#     # Calculate decay for each time point
+#     for age in t:
+#         try:
+#             area, _ = quad(fx, 0, age, full_output=1)
+#             decay_value = math.exp(-area)
+#         except Exception as e:
+#             print(f"Integration failed for age {age}: {e}")
+#             decay_value = 0  # or some other appropriate default value
+#         decay.append(decay_value)
+    
+#     return decay
+# def single_bathtub_decay(t, lambda_single, v_single, sigma_single):
+#     """
+#     Calculate decay values for given time points using a single bathtub curve.
+
+#     Parameters
+#     ----------
+#     t : array-like
+#         Time points to calculate decay for.
+#     lambda_single : float
+#         Lambda parameter for the bathtub curve.
+#     v_single : float
+#         Shape parameter for the bathtub curve.
+#     sigma_single : float
+#         Sigma parameter for the bathtub curve.
+
+#     Returns
+#     -------
+#     numpy.ndarray
+#         An array of decay values corresponding to the input time points.
+#     """
+#     def bathtub_curve_new(tau, lambda_single, v_single, sigma_single):
+#         denominator = 1 - sigma_single * np.power(lambda_single * tau, v_single)
+#         denominator = np.maximum(denominator, np.finfo(float).eps)  # Avoid division by zero
+#         numerator = lambda_single * v_single * np.power(lambda_single * tau, v_single - 1)
+#         return numerator / denominator
+
+#     # Vectorize the bathtub_curve_new function
+#     vectorized_bathtub_curve = np.vectorize(bathtub_curve_new)
+
+#     def integrand(tau):
+#         return vectorized_bathtub_curve(tau, lambda_single, v_single, sigma_single)
+
+#     decay = np.zeros_like(t, dtype=float)
+    
+#     for i, age in enumerate(t):
+#         try:
+#             # Adjust integration tolerance
+#             area, _ = quad(integrand, 0, age, epsabs=1e-6, epsrel=1e-6)
+#             decay[i] = np.exp(-area)
+#         except Exception as e:
+#             print(f"Integration failed for age {age}: {e}")
+#             decay[i] = 0  # or some other appropriate default value
+    
+#     return decay
+
+
+# Define a small constant to replace np.finfo(float).eps
+EPSILON = 1e-15
+
+@vectorize(['float64(float64, float64, float64, float64)'], nopython=True)
+def bathtub_curve_new(tau, lambda_single, v_single, sigma_single):
+    tau = max(tau, EPSILON)
+    denominator = max(1 - sigma_single * (lambda_single * tau) ** v_single, EPSILON)
+    numerator = lambda_single * v_single * (lambda_single * tau) ** (v_single - 1)
+    return numerator / denominator
+
+@njit
+def custom_integrate(func, a, b, lambda_single, v_single, sigma_single, n=100):
+    x = np.linspace(a, b, n)
+    y = func(x, lambda_single, v_single, sigma_single)
+    return np.trapz(y, x)
+
+@njit
 def single_bathtub_decay(t, lambda_single, v_single, sigma_single):
-    """
-    Calculate decay values for given time points using a single bathtub curve.
-
-    Parameters
-    ----------
-    t : array-like
-        Time points to calculate decay for.
-        lambda_single : float
-        Lambda parameter for the bathtub curve.
-    v_single : float
-        Shape parameter for the bathtub curve.
-    sigma_single : float
-        Sigma parameter for the bathtub curve.
-
-    Returns
-    -------
-    list
-        A list of survival probabilities for the corals, calculated using a single
-        bathtub curve. Each survival probability corresponds to the age
-        in the input list `t`.
-    """
-    fx = bathtub_curve(lambda_single, v_single, sigma_single)
-    decay = []      
-    # Calculate decay for each time point
-    for age in range(len(t)):
-        area = quad(fx, 0, t[age])[0]
-        decay.append(math.exp(-area))
+    decay = np.zeros_like(t, dtype=np.float64)
+    
+    for i, age in enumerate(t):
+        area = custom_integrate(bathtub_curve_new, 0, age, lambda_single, v_single, sigma_single)
+        decay[i] = np.exp(-area)
     
     return decay
+
 
 def get_decay_parameters(dsst):
     """
@@ -280,44 +361,63 @@ def piecewise_competence(ages, tc, Tcp, alpha, beta1, beta2, v):
     return(competence)
 
 
-def single_competence(ages, tc, alpha, beta, v):
-    """
-    Calculates the larval competence values at different ages (days), using the piecewise
-    Weibull-exponential competence model. This function is a replica of the R code used by
-    Moneghetti et al. (2019) to calculate competence.
+# def single_competence(ages, tc, alpha, beta, v):
+#     """
+#     Calculates the larval competence values at different ages (days), using the piecewise
+#     Weibull-exponential competence model. This function is a replica of the R code used by
+#     Moneghetti et al. (2019) to calculate competence.
 
-    Parameters
-    ----------
-    ages : list
-        A list of larval ages. Each age must be a positive integer or float.
-    tc : float
-        The age at which the larvae reach their maximum competence level. Must be a
-        positive integer or float.
-    alpha : float
-        The scale parameter of the Weibull distribution. Must be a positive integer or float.
-    beta : float
-        The shape parameter of the Weibull distribution in the decline phase. Must be
-        a positive integer or float.
-    v : float
-        The exponential decay parameter in the decline phase. Must be a positive
-        integer or float.
+#     Parameters
+#     ----------
+#     ages : list
+#         A list of larval ages. Each age must be a positive integer or float.
+#     tc : float
+#         The age at which the larvae reach their maximum competence level. Must be a
+#         positive integer or float.
+#     alpha : float
+#         The scale parameter of the Weibull distribution. Must be a positive integer or float.
+#     beta : float
+#         The shape parameter of the Weibull distribution in the decline phase. Must be
+#         a positive integer or float.
+#     v : float
+#         The exponential decay parameter in the decline phase. Must be a positive
+#         integer or float.
 
-    Returns
-    -------
-    list
-        A list of competence values for larvae, calculated using the piecewise
-        Weibull-exponential competence model. Each competence value corresponds to the age
-        in the input list `ages`.
-    """
+#     Returns
+#     -------
+#     list
+#         A list of competence values for larvae, calculated using the piecewise
+#         Weibull-exponential competence model. Each competence value corresponds to the age
+#         in the input list `ages`.
+#     """
+#     competence = []
+#     for age in range(len(ages)):
+#         if ages[age] < tc:
+#             area = 0
+#         else:
+#             fxtau = lambda tau: alpha * math.exp(-alpha * (tau - tc)) * math.exp(-pow((beta * (ages[age] - tau)), v))
+#             area = quad(fxtau, tc, ages[age])[0]
+#         competence.append(area)
+#     return competence
+
+def single_competence(ages, tc, alpha, beta, v):    
     competence = []
-    for age in range(len(ages)):
-        if ages[age] < tc:
+    for age in ages:
+        if age < tc:
             area = 0
         else:
-            fxtau = lambda tau: alpha * math.exp(-alpha * (tau - tc)) * math.exp(-pow((beta * (ages[age] - tau)), v))
-            area = quad(fxtau, tc, ages[age])[0]
+            fxtau = lambda tau: alpha * np.exp(-alpha * (tau - tc)) * np.exp(-np.power((beta * (age - tau)), v))
+            try:
+                area = quad(fxtau, tc, age)[0]
+            except Exception as e:
+                print(f"Integration failed for age {age}: {e}")
+                area = 0
         competence.append(area)
-    return competence
+    if not competence:
+        print("Warning: Competence vector is empty!")
+    
+    return np.array(competence)
+
 
 def get_sst_values(reef_id, scenario):
     """
@@ -335,22 +435,36 @@ def get_sst_values(reef_id, scenario):
     pandas.Series
         A series containing SST values for the specified reef ID across all years.
     """
-    # Define file paths for each scenario
     file_paths = {
-        '2p6': '/datasets/work/oa-coconet/work/gbr_connectivity/Mandy_Cheung/input_data/4_04_CS126_round_deltaSST.csv',
-        '4p5': '/datasets/work/oa-coconet/work/gbr_connectivity/Mandy_Cheung/input_data/4_04_CS245_round_deltaSST.csv',
-        '7p0': '/datasets/work/oa-coconet/work/gbr_connectivity/Mandy_Cheung/input_data/4_04_CS370_round_deltaSST.csv',
-        '8p5': '/datasets/work/oa-coconet/work/gbr_connectivity/Mandy_Cheung/input_data/4_04_CS585_round_deltaSST.csv'
+        '2p6': '/datasets/work/oa-coconet/work/Mandy_Cheung/input_data/4_04_CS126_round_deltaSST.csv',
+        '4p5': '/datasets/work/oa-coconet/work/Mandy_Cheung/input_data/4_04_CS245_round_deltaSST.csv',
+        '7p0': '/datasets/work/oa-coconet/work/Mandy_Cheung/input_data/4_04_CS370_round_deltaSST.csv',
+        '8p5': '/datasets/work/oa-coconet/work/Mandy_Cheung/input_data/4_04_CS585_round_deltaSST.csv'
     }
     
-    # Check if the scenario is valid
     if scenario not in file_paths:
         raise ValueError(f"Invalid scenario: {scenario}. Must be one of: {', '.join(file_paths.keys())}")
     
-    # Read only the specific row from the CSV file, starting from the 4th column, skipping the header
-    sst_values = pd.read_csv(file_paths[scenario], index_col=0, header=0, usecols=range(3, None)).iloc[reef_id]
+    file_path = file_paths[scenario]
     
-    return sst_values
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(f"SST file not found: {file_path}")
+    
+    try:
+        df = pd.read_csv(file_path, index_col=0, header=0).reset_index(drop=True)
+        
+        if reef_id not in df.index:
+            min_id = df.index.min()
+            max_id = df.index.max()
+            raise KeyError(f"Reef ID {reef_id} not found in the SST file for scenario {scenario}. Available IDs range from {min_id} to {max_id}")
+        
+        sst_values = df.loc[reef_id, df.columns[2:]]
+        if sst_values.empty:
+            raise ValueError(f"No SST values found for reef_id {reef_id} in scenario {scenario}")
+        
+        return sst_values
+    except Exception as e:
+        raise Exception(f"Error reading SST values for reef_id {reef_id} in scenario {scenario}: {str(e)}")
 
 def calculate_decay_and_competence(dsst_values, settled_age, settled_traj, ntraj):
     """
@@ -370,29 +484,31 @@ def calculate_decay_and_competence(dsst_values, settled_age, settled_traj, ntraj
     --------
     tuple
     Sum of max connectivity values for each year of simulation.
+    Average connectivity values for each year of simulation.
     """
     max_connectivity_vector = []
+    avg_connectivity_vector = []
+    print(f"Calculating decay and competence for {len(dsst_values)} years")
     for sst_value in dsst_values:
         tc, alpha, beta, v = get_competence_parameters(sst_value)
         lmbda, v_decay, sigma = get_decay_parameters(sst_value)
-        
         decay = single_bathtub_decay(settled_age, lmbda, v_decay, sigma)
         competence = single_competence(settled_age, tc, alpha, beta, v)
-        
         # Calculate connectivity and create DataFrame
         connect = pd.DataFrame({
             'connect': np.array(decay) * np.array(competence),
             'traj': settled_traj,
         })
-        
+       
         # Group by trajectory and calculate max
         connect_grouped = connect.groupby('traj')
         connect_max = connect_grouped['connect'].max() / ntraj
-        total_connect_max = connect_max.sum()
+        total_connect_max_sum = connect_max.sum()
+        total_connect_max_avg = connect_max.mean()
 
-        max_connectivity_vector.append(total_connect_max.to_numpy())
-
-    return max_connectivity_vector
+        max_connectivity_vector.append(total_connect_max_sum)
+        avg_connectivity_vector.append(total_connect_max_avg)
+    return max_connectivity_vector, avg_connectivity_vector
 
 ##~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 ##~~~ In polygon algorithm and optimizers
@@ -473,6 +589,7 @@ def calc(source_reef):
         file_name = path + "/GBR1_H2p0_Coral_Release_" + release_start_day + "_Polygon_" +  str(source_reef) + '_Wind_3_percent_displacement_field.nc'
         if not os.path.exists(file_name):
             print('file missing - ' + str(source_reef))
+            return None
         else:
             output_nc = xr.open_dataset(file_name)
             ntraj     = output_nc.dims['traj']
@@ -483,40 +600,34 @@ def calc(source_reef):
                 'age' : output_nc['age'].values.ravel() / 86400 ## Seconds to days
             })
             output_nc.close()
-            
-            print(f"Source reef {source_reef}: Initial particle count: {len(particles)}")
-            
+            ## make source reef an integer
+            source_reef = int(source_reef)
+
             # Cleaning the nans
             particles = particles.dropna()
-            print(f"Source reef {source_reef}: Particle count after dropping NaNs: {len(particles)}")
-            
             ## remove particles bellow minimum age
             particles = particles[particles['age'] > tc]
-            print(f"Source reef {source_reef}: Particle count after age filter: {len(particles)}")
             
             ## set particles boundaries in model domain
             particle_max_lat = np.nanmax(particles['latitudes'].values)
             particle_min_lat = np.nanmin(particles['latitudes'].values)
-            print(f"Source reef {source_reef}: Particle latitude range: {particle_min_lat} to {particle_max_lat}")
-            
+                        
             # making boolean series
             upper_bound = data_shape['min_lat'] <= particle_max_lat
             mmax = upper_bound.to_numpy()
             inf_bound   = data_shape['max_lat'] >= particle_min_lat
             minf = inf_bound.to_numpy()
             boundary_reefs = np.where(np.multiply(minf, mmax))[0]
-            print(f"Source reef {source_reef}: Number of potential sink reefs: {len(boundary_reefs)}")
             
             ## Get the dSST for each source reef
-            dsst_2p6 = get_sst_values(source_reef, "2p6")
-            print(f"Source reef {source_reef}: dSST for 2p6 scenario: {dsst_2p6}")
-            dsst_4p5 = get_sst_values(source_reef, "4p5")
-            print(f"Source reef {source_reef}: dSST for 4p5 scenario: {dsst_4p5}")
-            dsst_7p0 = get_sst_values(source_reef, "7p0")
-            print(f"Source reef {source_reef}: dSST for 7p0 scenario: {dsst_7p0}")
-            dsst_8p5 = get_sst_values(source_reef, "8p5")
-            print(f"Source reef {source_reef}: dSST for 8p5 scenario: {dsst_8p5}")
-            
+            try:
+                dsst_2p6 = get_sst_values(source_reef, "2p6")
+                dsst_4p5 = get_sst_values(source_reef, "4p5")
+                dsst_7p0 = get_sst_values(source_reef, "7p0")
+                dsst_8p5 = get_sst_values(source_reef, "8p5")
+            except Exception as e:
+                print(f"Error getting SST values for reef {source_reef}: {e}")
+                return None
             year_simulations = len(dsst_2p6)
             num_scenarios = 4
             ## Creating empty arrays    
@@ -539,6 +650,8 @@ def calc(source_reef):
                     settled_traj = particles['trajectories'].iloc[m].values
                     ## get the model decay and competence for the entired projection
                     # Calculate decay and competence for the 2p6 scenario
+                    print(f"Source reef {source_reef}: Calculating decay and competence for all scenarios")
+                    print("----------------------------------------")
                     connectivity_2p6 = calculate_decay_and_competence(dsst_2p6, settled_age, settled_traj, ntraj)
                     # Calculate decay and competence for the 4p5 scenario
                     connectivity_4p5 = calculate_decay_and_competence(dsst_4p5, settled_age, settled_traj, ntraj)
@@ -607,23 +720,29 @@ len_years_projection = len(years_projection)
 path='/datasets/work/oa-coconet/work/OceanParcels_outputs/Coral/' + release_start_day
 print(f"path: {path}")
 jobs = range(num_reefs)
-n_jobs = int(os.getenv('SLURM_CPUS_ON_NODE', 10))
+n_jobs = int(os.getenv('SLURM_CPUS_ON_NODE', 20))
 ## print the parameters
 print(f"Number of reefs: {num_reefs}")
 print(f"Release start day: {release_start_day}")
 print(f"Scenarios: {scenarios}")
 print(f"Years projection: {years_projection}")
 print(f"Number of jobs: {n_jobs}")
-with parallel_backend(backend='loky', n_jobs=n_jobs):
-    results_list = Parallel()(delayed(calc)(k) for k in jobs)
+results_list = []
+#with parallel_backend(backend='loky', n_jobs=n_jobs):
+#    results_list = Parallel()(delayed(calc)(k) for k in jobs)
+for k in jobs:
+   result = calc(k)#
+   results_list.append(result)
+   print(f"Completed job {k}/{len(jobs)}")
 
 print('calculations done', time.strftime("%H:%M:%S"), flush = True)
 
 ## Creating empty arrays
 connectivity_matrix_max = np.zeros((len_years_projection, len_scenarios, num_reefs, num_reefs))
-
+connectivity_matrix_avg = np.zeros((len_years_projection, len_scenarios, num_reefs, num_reefs))
 for k in jobs:
-    connectivity_matrix_max[:, :, k, :] = results_list[k]
+    connectivity_matrix_max[:, :, k, :] = results_list[k][0]
+    connectivity_matrix_avg[:, :, k, :] = results_list[k][1]
 
 
 ## generate a netcdf file with the connectivity data
@@ -631,8 +750,10 @@ for k in jobs:
 
 ds = xr.Dataset(
     {
-        "connectivity": (["year", "scenario", "source_reef", "target_reef"], 
-                         connectivity_matrix_max.astype(np.float32))
+        "connectivity_max": (["year", "scenario", "source_reef", "target_reef"], 
+                         connectivity_matrix_max.astype(np.float32)),
+        "connectivity_avg": (["year", "scenario", "source_reef", "target_reef"], 
+                         connectivity_matrix_avg.astype(np.float32))
     },
     coords={
         "year": years_projection,
@@ -650,9 +771,14 @@ ds.attrs["created_on"] = time.strftime("%Y-%m-%d %H:%M:%S")
 ds.attrs["created_by"] = "Javier Porobic, email: javier.porobicgarate@csiro.au"
 
 # Save the dataset to a NetCDF file
-output_file = f"connectivity_matrix_{release_start_day}.nc"
+output_file = f"connectivity_matrix_trapezoid_integration_{release_start_day}.nc"
 encoding = {
-    'connectivity': {
+    'connectivity_max': {
+        'zlib': True,
+        'complevel': 9,
+        'dtype': 'float32'
+    },
+    'connectivity_avg': {
         'zlib': True,
         'complevel': 9,
         'dtype': 'float32'
@@ -660,4 +786,18 @@ encoding = {
 }
 ds.to_netcdf(output_file, encoding=encoding)
 print(f"NetCDF file created: {output_file}")
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 

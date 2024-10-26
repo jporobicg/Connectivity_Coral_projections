@@ -2,9 +2,9 @@
 #SBATCH --account=OD-232538
 #SBATCH --time=1-00:00
 #SBATCH --mem=40g
-#SBATCH --cpus-per-task=10
+#SBATCH --cpus-per-task=20
 #SBATCH --job-name='Coral - connectivity'
-#SBATCH --array=12-14
+#SBATCH --array=0-22
 
 module load python
 
@@ -39,3 +39,4 @@ dates=(
 (( release = SLURM_ARRAY_TASK_ID ))
 
 python matrix_calculations.py ${dates[release]}
+
